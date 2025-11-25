@@ -1,0 +1,14 @@
+{
+  "name": "Jane Doe",
+  "headline": "Machine Learning Engineer",
+  "skills": ["Python", "Machine Learning", "TensorFlow", "Docker"],
+  "tools_and_tech": ["Git", "CI/CD", "AWS", "Docker"],
+  "education": "MSc in Computer Science with focus on Machine Learning",
+  "experience": [
+    {
+      "role": "ML Engineer",
+      "company": "Acme Corp",
+      "description": "Built and deployed ML models for demand forecasting using Python, TensorFlow, and AWS."
+    }
+  ]
+}

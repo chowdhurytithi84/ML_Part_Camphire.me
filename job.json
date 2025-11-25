@@ -1,0 +1,15 @@
+{
+  "title": "Senior Machine Learning Engineer",
+  "required_qualities": [
+    "Python",
+    "Machine Learning",
+    "Deep Learning",
+    "MLOps",
+    "Kubernetes"
+  ],
+  "nice_to_have": [
+    "Time-series forecasting",
+    "Rust"
+  ],
+  "description": "You will build and deploy ML models in production, lead projects, and collaborate with cross-functional teams."
+}

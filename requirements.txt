@@ -2,3 +2,13 @@ langchain-openai>=0.2.0
 langchain-core>=0.2.0
 pydantic>=2.7.0
 openai>=1.40.0
+pymupdf
+pymupdf4llm
+pymupdf-layout
+pypdf
+langchain_groq
+langchain_community
+langchain
+python-dotenv
+
+

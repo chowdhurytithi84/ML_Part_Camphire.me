@@ -1,101 +1,69 @@
 import os
 import json
 from typing import Optional, List
-
+from langchain_community.document_loaders import PyPDFLoader
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
+from datetime import datetime
+from prompts.prompt_template import RESUME_TEXT_TO_JSON_PROMPT, MATHCH_JOB_AND_RESUME_PROMPT
+from schema import MatchResult
+from langchain_core.output_parsers import PydanticOutputParser, JsonOutputParser
+from dotenv import load_dotenv
+
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
-# ---------- 1) Soft, robust schema ----------
-
-class Requirement(BaseModel):
-    name: str
-    # Soft constraints: we *suggest* values but don't enforce them
-    priority: str = Field(
-        description=(
-            "How critical this requirement is for the role. "
-            "Recommended values: 'must_have', 'nice_to_have', 'optional'."
-        )
-    )
-    category: str = Field(
-        default="other",
-        description=(
-            "Category of the requirement. Recommended values: "
-            "'skill', 'soft_skill', 'experience', 'domain_knowledge', "
-            "'tool', 'other', etc."
-        )
-    )
-    details: Optional[str] = Field(
-        default=None,
-        description="Free-text explanation of what this requirement means in context."
-    )
 
 
-class ExplicitMatch(BaseModel):
-    """Requirements clearly and explicitly supported by the CV."""
-    name: str
-    evidence: str = Field(
-        description="Direct quote or summary from the CV that supports this match."
-    )
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="Model confidence that this is a solid, explicit match."
-    )
+
+job_description = """
+    The Position: 
+    About Roche Digital Technology (RDT)
+    Roche Digital Technology (RDT) is where innovation meets purpose. As a global team at the heart of Roche, we are a community of business-minded technologists committed to help shape tomorrow’s digital future of healthcare. Our mission is to power Roche through cutting-edge digital technologies, harnessing the potential of artificial intelligence, data, and scalable tech innovations. Driven by purpose and passion, we’re building a future where digital is a core strength across all of Roche, enabling smarter ways of working, unlocking human potential, and driving breakthroughs that truly matter for millions of patients around the world.
+
+    Role Summary: 
+    The responsible and ethical use of Artificial Intelligence is paramount to achieving this goal. The Head of AI Risks & Ethics is a senior leadership role, reporting directly to the Chief AI Officer, tasked with establishing and operationalizing a global framework that balances breakthrough AI innovation with robust governance and unwavering ethical standards.
+
+    You will lead a global team to build the essential guardrails that enable our scientists, clinicians, and business leaders to leverage AI confidently and compliantly. Your group will serve as the central hub of expertise on AI ethics, risk management, and regulatory compliance, empowering teams across our Pharmaceuticals and Diagnostics divisions.
+
+    The Opportunity:
+
+    Risk & Ethics Framework: Design, implement, and lead the global framework for managing AI-specific risks. This includes establishing the ethical principles, policies, and control mechanisms that ensure responsible AI development and deployment, in alignment with the overall AI strategy
+    Risk Management Framework: Design and operate a comprehensive risk management framework to identify, assess, and mitigate ethical, legal, security, and reputational risks associated with AI systems, from research to deployment
+    Strategic Partnership & Consulting: Act as a primary strategic partner to key leaders, especially the Head of AI Strategy & Governance, to embed ethical and risk-based considerations directly into the core AI lifecycle. Provide expert consultation to development teams on mitigating risks such as bias, lack of transparency, and privacy violations
+    Regulatory Leadership: Monitor the global regulatory landscape for AI (e.g., EU AI Act, FDA/EMA guidelines) and translate complex requirements into actionable corporate policies and practical guidance for technical and non-technical audiences.
+    Ethical Oversight & Review: Establish and chair an AI Ethics Board or review council to provide oversight for high-risk AI use cases, ensuring alignment with Roche’s values and patient-centric mission
+    Leadership & Team Development: Lead and mentor a high-performing global team of AI risk and ethics specialists, fostering a culture of expertise, collaboration, and pragmatic problem-solving
+    Culture & Enablement: Champion a culture of responsible AI innovation. Develop and deliver training and awareness programs to build AI literacy and ethical decision-making capabilities across the organization
+    GxP and Patient Data Compliance: Ensure that all AI governance frameworks and solutions deployed in regulated areas are fully compliant with GxP standards (e.g., 21 CFR Part 11) and global patient data privacy regulations (e.g., GDPR, HIPAA)
 
 
-class ObviousGap(BaseModel):
-    """Requirements that are clearly missing or unlikely based on the CV."""
-    name: str
-    reason: str = Field(
-        description="Why this is considered missing/unlikely (based on job vs CV)."
-    )
-    severity: str = Field(
-        description="How critical this gap is for the role. "
-                    "Recommended: 'low', 'medium', 'high'."
-    )
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="Model confidence that this is truly missing/unlikely."
-    )
+    Who you are:
 
+    Education: Bachelor’s or Master’s degree in a relevant field such as Computer Science, Law, Information Systems, Bioethics, or a related discipline. A combination of technical and legal/ethical education is highly advantageous.
+    Experience:
+    A minimum of 10+ years of overall professional experience in technology, governance, or risk management within a large, global, matrixed organization
+    A mandatory 5 years of direct, specialized experience in AI ethics, AI governance, or technology risk management
+    Pharmaceutical or life sciences industry experience is strongly preferred to ensure credibility and ability to navigate the specific challenges of our industry.
+    Leadership & Influence:
+    Proven experience leading and developing global teams, with a track record of managing both direct and indirect reports
+    Exceptional influencing skills, with the ability to build consensus and drive alignment among senior stakeholders with diverse priorities.
+    Technical & Regulatory Knowledge:
+    Deep understanding of AI/ML concepts, model development lifecycles, and associated risks (e.g., bias, transparency, security)
+    Expert knowledge of the global AI regulatory environment, including the EU AI Act.
+    Core Competencies:
+    Demonstrated executive presence and exceptional communication skills.
+    A pragmatic problem-solver who can create effective controls without stifling innovation
+    High tolerance for navigating ambiguity and the ability to lead effectively in a rapidly evolving field
 
-class InferredMatch(BaseModel):
-    """Requirements that are not explicitly written but are likely present."""
-    name: str
-    inference_basis: str = Field(
-        description=(
-            "Explanation of how this skill/quality is inferred from education, "
-            "frameworks, tools, domains or context in the CV."
-        )
-    )
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="Model confidence that the candidate actually has this."
-    )
+    Who we are: 
+    A healthier future drives us to innovate. Together, more than 100’000 employees across the globe are dedicated to advance science, ensuring everyone has access to healthcare today and for generations to come. Our efforts result in more than 26 million people treated with our medicines and over 30 billion tests conducted using our Diagnostics products. We empower each other to explore new possibilities, foster creativity, and keep our ambitions high, so we can deliver life-changing healthcare solutions that make a global impact.
 
-
-class CandidateProfile(BaseModel):
-    """Structured view of the candidate derived from the CV."""
-    headline: Optional[str] = None
-    main_roles: Optional[List[str]] = None
-    skills: Optional[List[str]] = None
-    tools_and_tech: Optional[List[str]] = None
-    domains: Optional[List[str]] = None
-    education_summary: Optional[str] = None
-    experience_summary: Optional[str] = None
-    other_signals: Optional[List[str]] = None
-
-
-class MatchResult(BaseModel):
-    """Full reasoning result for job ↔ CV comparison."""
-    extracted_requirements: List[Requirement]
-    candidate_profile: CandidateProfile
-    explicit_matches: List[ExplicitMatch]
-    obvious_gaps: List[ObviousGap]
-    inferred_matches: List[InferredMatch]
-
+"""
 
 # ---------- 2) LLM chain (robust prompt) ----------
 
@@ -146,11 +114,11 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-llm = ChatOpenAI(
-    model="gpt-5-nano",   # or "gpt-4.1" for stronger reasoning       # more deterministic, recruiter-like
-)
+# llm = ChatOpenAI(
+#     model="gpt-5-nano",   # or "gpt-4.1" for stronger reasoning       # more deterministic, recruiter-like
+# )
 
-chain = prompt | llm | parser
+# chain = prompt | llm | parser
 
 
 # ---------- 3) Public helpers ----------
@@ -173,14 +141,65 @@ def match_job_and_cv_from_files(job_path: str, cv_path: str) -> MatchResult:
     return match_job_and_cv_from_dicts(job_json, cv_json)
 
 
+def get_llm():
+    llm =ChatGroq(model="llama-3.3-70b-versatile", groq_api_key= GROQ_API_KEY, temperature=1)
+    return llm
+
+# ---------- Utility to load PDF text ----------
+def load_pdf_text(pdf_path):
+    loader = PyPDFLoader(pdf_path)
+    pages = loader.load()
+    text = " ".join([page.page_content for page in pages])
+    return text
+
+# ---------- PDF to JSON conversion utility ----------
+def convert_pdf_to_json(pdf_path):
+    try:
+        if not pdf_path or not os.path.isfile(pdf_path):
+            return {"message": "Provide the resume file"}
+        pdf_text_data = load_pdf_text(pdf_path)
+        gemma_model = get_llm()
+        resume_text_to_json_chain = RESUME_TEXT_TO_JSON_PROMPT | gemma_model | JsonOutputParser()
+        resume_json_data = resume_text_to_json_chain.invoke({"resume_text": pdf_text_data})
+        print(f"JSON DATA: {resume_json_data}")
+        return resume_json_data
+    except Exception as e:
+        raise Exception("Unable to process the resume file due to : " + str(e))
+
+
+# ---------- Main matching function ----------
+def match_job_and_resume(job_description, resume_file_path):
+    try:
+        parser = PydanticOutputParser(pydantic_object=MatchResult)
+        start_time = datetime.now()
+        print(f"start time: {start_time}")
+        resume_json_data = convert_pdf_to_json(resume_file_path)
+        gemma_model = get_llm()
+        match_job_and_resume_chain = MATHCH_JOB_AND_RESUME_PROMPT | gemma_model | parser
+        result = match_job_and_resume_chain.invoke({
+            "job_text_data": job_description,
+            "resume_json": resume_json_data,
+            "format_instructions": parser.get_format_instructions()
+        })
+        json_result = json.loads(result.model_dump_json(indent=2))
+        print(f"=============== Match Result ===============")
+        print(f"Match Result: {json_result}")
+        print(f"Type of result {type(json_result)}")
+        end_time = datetime.now()
+        print(f"end time: {end_time}")
+
+        return json_result
+    except Exception as e:
+        print(f"Error : {str(e)}")
+        return None 
+
+
 # ---------- 4) CLI / quick test ----------
 
 if __name__ == "__main__":
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError(
-            "Please set the OPENAI_API_KEY environment variable before running."
-        )
-
-    result = match_job_and_cv_from_files("job.json", "cv.json")
-    print(result.model_dump_json(indent=2))
+    # if not os.getenv("OPENAI_API_KEY"):
+    #     raise RuntimeError(
+    #         "Please set the OPENAI_API_KEY environment variable before running."
+    #     )
+    result = match_job_and_resume(job_description, "Nadeem_Full_Stack_Engineer_Resume.pdf")
 

@@ -1,0 +1,239 @@
+import pdfplumber
+import re
+import json
+import os
+from datetime import datetime
+
+def extract_text(pdf_path):
+    text = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text += page.extract_text() + "\n"
+    return text
+
+def get_lines(text):
+    return [l.strip() for l in text.split('\n') if l.strip()]
+
+def extract_contact(lines):
+    name = lines[0] if lines else None
+    email = None
+    phone = None
+    location = None
+    
+    header = '\n'.join(lines[:10])
+    
+    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', header)
+    if email_match:
+        email = email_match.group()
+    
+    phone_match = re.search(r'[\+\(]?\d[\d\s\-\(\)]{9,}', header)
+    if phone_match:
+        phone = phone_match.group().strip()
+    
+    loc_match = re.search(r'([A-Z][a-z]+,\s*[A-Z]{2})', header)
+    if loc_match:
+        location = loc_match.group()
+    
+    return {"name": name, "email": email, "phone": phone, "location": location}
+
+def find_section(lines, section):
+    patterns = {
+        'education': r'^EDUCATION$',
+        'experience': r'^(PROFESSIONAL EXPERIENCE|EXPERIENCE)$',
+        'skills': r'^(TECHNICAL SKILLS & CERTIFICATIONS|TECHNICAL SKILLS|SKILLS)$',
+        'projects': r'^(PERSONAL PROJECTS|PROJECTS)$'
+    }
+    
+    start = None
+    end = len(lines)
+    
+    for i, line in enumerate(lines):
+        if re.match(patterns.get(section, ''), line, re.I):
+            start = i + 1
+        elif start is not None:
+            for other in ['education', 'experience', 'skills', 'projects']:
+                if other != section and re.match(patterns.get(other, ''), line, re.I):
+                    end = i
+                    return start, end
+    
+    return start, end if start else (None, None)
+
+def get_education(lines, start, end):
+    if start is None:
+        return []
+    
+    section = lines[start:end]
+    entries = []
+    current = None
+    
+    for line in section:
+        if re.search(r'(University|College|Institute)', line, re.I):
+            if current:
+                entries.append(current)
+            current = {"institution": line, "degree": "", "duration": "", "details": []}
+        elif current:
+            if re.search(r'^(BS|BA|MS|MA|PhD|Bachelor|Master)', line, re.I):
+                current["degree"] = line
+            elif re.search(r'(19|20)\d{2}', line):
+                current["duration"] = line
+            else:
+                current["details"].append(line)
+    
+    if current:
+        entries.append(current)
+    
+    return entries
+
+def get_experience(lines, start, end):
+    if start is None:
+        return []
+    
+    section = lines[start:end]
+    entries = []
+    current = None
+    
+    i = 0
+    while i < len(section):
+        line = section[i]
+        
+        has_loc = re.search(r'[A-Z][a-z]+,\s*[A-Z]{2}', line)
+        is_caps = re.match(r'^[A-Z]', line)
+        is_short = len(line.split()) <= 5
+        not_bullet = not line.startswith('●')
+        
+        if has_loc and is_caps and is_short and not_bullet:
+            if current:
+                entries.append(current)
+            
+            company = re.sub(r'\s+[A-Z][a-z]+,\s*[A-Z]{2}.*', '', line).strip()
+            loc = re.search(r'([A-Z][a-z]+,\s*[A-Z]{2})', line)
+            
+            current = {
+                "company": company,
+                "title": "",
+                "location": loc.group() if loc else "",
+                "duration": "",
+                "responsibilities": []
+            }
+        elif current and not current["title"] and re.search(r'(Engineer|Developer|Analyst|Manager|Scientist|Consultant|Intern)', line, re.I):
+            current["title"] = line
+        elif current and re.search(r'(19|20)\d{2}', line):
+            current["duration"] = line
+        elif current and current["title"] and (line.startswith('●') or line.startswith('•')):
+            current["responsibilities"].append(line)
+        
+        i += 1
+    
+    if current:
+        entries.append(current)
+    
+    return entries
+
+def get_skills(lines, start, end):
+    if start is None:
+        return {}
+    
+    section = lines[start:end]
+    skills = {}
+    
+    for line in section:
+        if ':' in line and not line.startswith('●'):
+            parts = line.split(':', 1)
+            category = parts[0].strip()
+            items = parts[1].strip()
+            skill_list = [s.strip() for s in items.split(',') if s.strip()]
+            
+            if skill_list:
+                skills[category] = skill_list
+    
+    return skills
+
+def get_certs(lines, start, end):
+    if start is None:
+        return []
+    
+    section = lines[start:end]
+    certs = []
+    
+    for line in section:
+        if not line.startswith('●') and ':' not in line and len(line) > 5:
+            certs.append(line)
+    
+    return certs
+
+def get_projects(lines, start, end):
+    if start is None:
+        return []
+    
+    section = lines[start:end]
+    projects = []
+    current = None
+    
+    for line in section:
+        if re.match(r'^[A-Z]', line) and not line.startswith('●') and len(line) < 80:
+            if current:
+                projects.append(current)
+            current = {"name": line, "details": []}
+        elif current and line.startswith('●'):
+            current["details"].append(line)
+    
+    if current:
+        projects.append(current)
+    
+    return projects
+
+def parse_cv(text):
+    lines = get_lines(text)
+    contact = extract_contact(lines)
+    
+    edu_s, edu_e = find_section(lines, 'education')
+    exp_s, exp_e = find_section(lines, 'experience')
+    ski_s, ski_e = find_section(lines, 'skills')
+    pro_s, pro_e = find_section(lines, 'projects')
+    
+    certs = []
+    if ski_s and ski_e:
+        for i, line in enumerate(lines[ski_s:ski_e]):
+            if re.match(r'^(CERTIFICATIONS|AWARDS)', line, re.I):
+                certs = get_certs(lines, ski_s + i + 1, ski_e)
+                ski_e = ski_s + i
+                break
+    
+    return {
+        "personal_info": contact,
+        "education": get_education(lines, edu_s, edu_e),
+        "experience": get_experience(lines, exp_s, exp_e),
+        "skills": get_skills(lines, ski_s, ski_e),
+        "certifications": certs,
+        "projects": get_projects(lines, pro_s, pro_e),
+        "extracted_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+def process_folder(input_folder=".", output_folder="cv_outputs"):
+    os.makedirs(output_folder, exist_ok=True)
+    
+    pdf_files = [f for f in os.listdir(input_folder) if f.endswith('.pdf')]
+    
+    if not pdf_files:
+        print("No PDF files found!")
+        return
+    
+    print(f"Found {len(pdf_files)} PDF files\n")
+    
+    for pdf_file in pdf_files:
+        try:
+            text = extract_text(os.path.join(input_folder, pdf_file))
+            data = parse_cv(text)
+            
+            output_file = pdf_file.replace('.pdf', '.json')
+            with open(os.path.join(output_folder, output_file), 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            print(f"✓ {pdf_file}")
+        except Exception as e:
+            print(f"✗ {pdf_file}: {e}")
+    
+    print(f"\nDone! Check '{output_folder}' folder")
+
+if __name__ == "__main__":
+    process_folder(input_folder=".", output_folder="cv_outputs")
